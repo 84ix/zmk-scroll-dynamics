@@ -1,0 +1,9 @@
+config ZMK_INPUT_PROCESSOR_SCROLL_DYNAMICS
+    bool "Scroll dynamics input processor"
+    default y
+    depends on DT_HAS_ZMK_INPUT_PROCESSOR_SCROLL_DYNAMICS_ENABLED
+    select ZMK_POINTING
+    help
+      Enable the scroll dynamics input processor. It combines zero-delay
+      axis snap, scroll acceleration, inertia, and remainder quantization
+      for normal wheel and horizontal wheel reports.

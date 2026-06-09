@@ -1,0 +1,78 @@
+description: Scroll dynamics input processor
+
+compatible: "zmk,input-processor-scroll-dynamics"
+
+include: ip_zero_param.yaml
+
+properties:
+  axis-mode:
+    type: string
+    enum:
+      - "x"
+      - "y"
+      - "snap"
+    default: "snap"
+  output-axis:
+    type: string
+    enum:
+      - "wheel"
+      - "hwheel"
+      - "auto"
+    default: "auto"
+  invert-x:
+    type: boolean
+  invert-y:
+    type: boolean
+  input-scale:
+    type: int
+    default: 1000
+  wheel-step:
+    type: int
+    default: 1000
+  min-factor:
+    type: int
+    default: 800
+  max-factor:
+    type: int
+    default: 2400
+  speed-threshold:
+    type: int
+    default: 900
+  speed-max:
+    type: int
+    default: 4500
+  acceleration-exponent:
+    type: int
+    default: 1
+  snap-ratio:
+    type: int
+    default: 1400
+  snap-switch-ratio:
+    type: int
+    default: 1800
+  snap-idle-ms:
+    type: int
+    default: 80
+  minor-axis-scale:
+    type: int
+    default: 0
+  inertia-start-speed:
+    type: int
+    default: 1300
+  inertia-start-distance:
+    type: int
+    default: 8
+  inertia-min-events:
+    type: int
+    default: 3
+  inertia-decay:
+    type: int
+    default: 860
+  inertia-stop-speed:
+    type: int
+    default: 80
+  inertia-tick-ms:
+    type: int
+    default: 8
+  reverse-cancel:
+    type: boolean
