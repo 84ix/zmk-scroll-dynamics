@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ZMK Scroll Dynamics Processor Design</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --text: #1b1f23;
+      --muted: #5d6670;
+      --line: #d8dde3;
+      --accent: #0b6bcb;
+      --accent-soft: #e7f1ff;
+      --code-bg: #f0f3f6;
+      --warn-bg: #fff5df;
+      --warn-line: #e0b34e;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+      line-height: 1.65;
+    }
+
+    main {
+      width: min(980px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0 56px;
+    }
+
+    header {
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 32px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 760px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    section {
+      margin-top: 20px;
+      padding: 22px 24px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 16px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    ul,
+    ol {
+      margin: 8px 0 0;
+      padding-left: 1.4em;
+    }
+
+    li {
+      margin: 4px 0;
+    }
+
+    code {
+      padding: 0.1em 0.35em;
+      background: var(--code-bg);
+      border-radius: 4px;
+      font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 12px 0;
+      padding: 14px 16px;
+      background: #17202a;
+      color: #edf4ff;
+      border-radius: 6px;
+      line-height: 1.45;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 13px;
+    }
+
+    .note {
+      padding: 14px 16px;
+      background: var(--warn-bg);
+      border-left: 4px solid var(--warn-line);
+      border-radius: 6px;
+    }
+
+    .profiles {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+
+    .profile {
+      padding: 16px;
+      background: var(--accent-soft);
+      border: 1px solid #b9d7fb;
+      border-radius: 8px;
+    }
+
+    .profile h3 {
+      margin-top: 0;
+      color: #084f96;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 12px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #eef1f4;
+      font-weight: 700;
+    }
+
+    a {
+      color: var(--accent);
+    }
+
+    @media (max-width: 720px) {
+      main {
+        width: min(100% - 20px, 980px);
+        padding-top: 24px;
+      }
+
+      h1 {
+        font-size: 26px;
+      }
+
+      section {
+        padding: 18px 16px;
+      }
+
+      .profiles {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>ZMK Scroll Dynamics Processor Design</h1>
+      <p class="lead">smooth scroll OFF 前提で、axis snap、scroll acceleration、scroll inertia、remainder quantization を1つに統合する ZMK input processor の設計書。</p>
+    </header>
+
+    <section>
+      <h2>Purpose</h2>
+      <p>自作マウスのスクロール処理を、OS差の少ない通常 wheel report で実現する。ZMK の high-resolution smooth scroll は使わず、firmware側で入力を整形し、通常の wheel / horizontal wheel に変換する。</p>
+      <p>対象processor名は仮に <code>zmk,input-processor-scroll-dynamics</code> とする。</p>
+    </section>
+
+    <section>
+      <h2>Requirements</h2>
+      <ol>
+        <li>macOS / Windows 11 の両方で実用的なスクロール量にする。</li>
+        <li>小さいスクロールは精密に、大きいスクロールは加速と慣性で伸ばす。</li>
+        <li>smooth scroll OFF でも、時間的に連続した wheel report により体感のがくつきを減らす。</li>
+        <li>縦横が混ざらないように、即時 axis snap / lock を行う。</li>
+        <li>snap 判定のために入力を保留しない。初動遅延は 0ms とする。</li>
+        <li>逆方向入力が入ったら inertia を即時キャンセルする。</li>
+        <li>整数 wheel 出力に変換する際、小数相当の剰余を保持して小入力を捨てない。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Non-Goals</h2>
+      <ul>
+        <li><code>CONFIG_ZMK_POINTING_SMOOTH_SCROLLING=y</code> の利用。</li>
+        <li>OSごとの標準プロファイル切り替え。</li>
+        <li>縦横同時の自由な2Dスクロール。</li>
+        <li>ポインタ移動用 acceleration processor の完全な互換再実装。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Host Constraint</h2>
+      <p class="note"><code>CONFIG_ZMK_POINTING_SMOOTH_SCROLLING=y</code> は HID Resolution Multiplier ベースの smooth scrolling を使う。ホスト OS ごとに解釈が違うため、同じファームウェア設定で macOS と Windows を完全に揃えるのは難しい。</p>
+      <p>このprocessorは high-resolution wheel ではなく通常 wheel を出力する。OS間の差を完全には消せないが、smooth scroll ON時の極端な倍率差は避ける。</p>
+    </section>
+
+    <section>
+      <h2>Kconfig</h2>
+      <pre><code>CONFIG_ZMK_POINTING=y
+# CONFIG_ZMK_POINTING_SMOOTH_SCROLLING is not set</code></pre>
+    </section>
+
+    <section>
+      <h2>Pipeline</h2>
+      <p>processorは raw pointer delta を受け取り、scroll delta を出力する。既存processorを直列に積むのではなく、内部状態を一元管理する。</p>
+      <pre><code>raw dx/dy
+  -&gt; direction transform
+  -&gt; zero-wait axis snap
+  -&gt; acceleration curve
+  -&gt; inertia state update
+  -&gt; fixed-point accumulator
+  -&gt; integer wheel/hwheel output</code></pre>
+    </section>
+
+    <section>
+      <h2>Devicetree Binding</h2>
+      <p>binding file name proposal: <code>zmk,input-processor-scroll-dynamics.yaml</code></p>
+      <pre><code>description: Scroll dynamics input processor
+compatible: "zmk,input-processor-scroll-dynamics"
+include: ip_zero_param.yaml
+
+properties:
+  axis-mode:
+    type: string
+    enum: ["x", "y", "snap"]
+    default: "snap"
+  output-axis:
+    type: string
+    enum: ["wheel", "hwheel", "auto"]
+    default: "auto"
+  invert-x:
+    type: boolean
+  invert-y:
+    type: boolean
+  input-scale:
+    type: int
+    default: 1000
+  wheel-step:
+    type: int
+    default: 1000
+  min-factor:
+    type: int
+    default: 800
+  max-factor:
+    type: int
+    default: 2400
+  speed-threshold:
+    type: int
+    default: 900
+  speed-max:
+    type: int
+    default: 4500
+  acceleration-exponent:
+    type: int
+    default: 1
+  snap-ratio:
+    type: int
+    default: 1400
+  snap-switch-ratio:
+    type: int
+    default: 1800
+  snap-idle-ms:
+    type: int
+    default: 80
+  minor-axis-scale:
+    type: int
+    default: 0
+  inertia-start-speed:
+    type: int
+    default: 1300
+  inertia-start-distance:
+    type: int
+    default: 8
+  inertia-min-events:
+    type: int
+    default: 3
+  inertia-decay:
+    type: int
+    default: 860
+  inertia-stop-speed:
+    type: int
+    default: 80
+  inertia-tick-ms:
+    type: int
+    default: 8
+  reverse-cancel:
+    type: boolean
+  track-remainders:
+    type: boolean</code></pre>
+    </section>
+
+    <section>
+      <h2>Runtime State</h2>
+      <pre><code>enum locked_axis {
+    AXIS_NONE,
+    AXIS_X,
+    AXIS_Y,
+};
+
+struct scroll_dynamics_state {
+    enum locked_axis locked_axis;
+    int64_t last_event_ms;
+    int64_t last_input_ms;
+    int32_t remainder_x;
+    int32_t remainder_y;
+    int32_t velocity;
+    int32_t inertia_velocity;
+    int32_t gesture_distance;
+    uint8_t gesture_events;
+    int8_t last_direction;
+    bool inertia_active;
+};</code></pre>
+      <p>数値は原則として fixed-point の 1000 倍スケールで保持する。浮動小数点は使わない。</p>
+    </section>
+
+    <section>
+      <h2>Axis Snap Algorithm</h2>
+      <p>snapは入力を保留しない。最初のイベントから即時に主軸を決め、非主軸を抑制する。</p>
+      <pre><code>if now - last_input_ms &gt; snap_idle_ms:
+    locked_axis = AXIS_NONE
+    gesture_distance = 0
+    gesture_events = 0
+
+abs_x = abs(dx)
+abs_y = abs(dy)
+
+if axis_mode == "x":
+    locked_axis = AXIS_X
+else if axis_mode == "y":
+    locked_axis = AXIS_Y
+else if locked_axis == AXIS_NONE:
+    if abs_x * 1000 &gt;= abs_y * snap_ratio:
+        locked_axis = AXIS_X
+    else if abs_y * 1000 &gt;= abs_x * snap_ratio:
+        locked_axis = AXIS_Y
+    else:
+        locked_axis = abs_x &gt;= abs_y ? AXIS_X : AXIS_Y
+else:
+    if locked_axis == AXIS_X and abs_y * 1000 &gt; abs_x * snap_switch_ratio:
+        locked_axis = AXIS_Y
+        cancel_inertia()
+    if locked_axis == AXIS_Y and abs_x * 1000 &gt; abs_y * snap_switch_ratio:
+        locked_axis = AXIS_X
+        cancel_inertia()</code></pre>
+      <p><code>minor-axis-scale = 0</code> の場合、非主軸成分は完全に捨てる。値を上げれば斜め入力を少し残せるが、今回の用途では 0 を初期値にする。</p>
+    </section>
+
+    <section>
+      <h2>Acceleration Algorithm</h2>
+      <p>acceleration は inertia の前に適用する。小入力の精密さを守るため、低速域では <code>min-factor</code> を使い、高速域に向かって <code>max-factor</code> へ線形補間する。</p>
+      <pre><code>speed = abs(delta) * 1000 / max(dt_ms, 1)
+
+if speed &lt;= speed_threshold:
+    factor = min_factor
+else:
+    t = clamp((speed - speed_threshold) * 1000 / (speed_max - speed_threshold), 0, 1000)
+    if acceleration_exponent == 2:
+        t = t * t / 1000
+    factor = min_factor + (max_factor - min_factor) * t / 1000
+
+scaled_delta = delta * input_scale * factor / 1000000</code></pre>
+      <p><code>acceleration-exponent = 1</code> を標準にする。<code>2</code> は高速側を強調したい場合だけ使う。</p>
+    </section>
+
+    <section>
+      <h2>Inertia Algorithm</h2>
+      <p>inertia は gesture が十分速く、十分長く、複数イベント続いた時だけ開始する。細かい補正操作では発動させない。</p>
+      <pre><code>gesture_distance += abs(scaled_delta)
+gesture_events += 1
+direction = sign(scaled_delta)
+
+if reverse_cancel and direction != 0 and direction != last_direction:
+    cancel_inertia()
+
+if speed &gt;= inertia_start_speed
+   and gesture_distance &gt;= inertia_start_distance
+   and gesture_events &gt;= inertia_min_events:
+    inertia_velocity = scaled_delta * 1000 / max(dt_ms, 1)
+    inertia_active = true
+
+on inertia tick:
+    inertia_delta = inertia_velocity * inertia_tick_ms / 1000
+    emit_delta(inertia_delta)
+    inertia_velocity = inertia_velocity * inertia_decay / 1000
+    if abs(inertia_velocity) &lt; inertia_stop_speed:
+        inertia_active = false</code></pre>
+      <p>新しい実入力が入った場合は、その入力方向が同じなら inertia を上書き更新する。逆方向なら即キャンセルする。</p>
+    </section>
+
+    <section>
+      <h2>Quantization</h2>
+      <p>smooth scroll OFF では最終出力が整数 wheel になる。小入力を捨てないため、軸ごとに remainder を保持する。</p>
+      <pre><code>accumulator = remainder + scaled_delta
+wheel_units = accumulator / wheel_step
+remainder = accumulator % wheel_step
+
+if wheel_units != 0:
+    emit wheel_units on selected output axis</code></pre>
+      <p><code>wheel-step</code> を小さくすると出力頻度が上がり、大きくすると精密だが反応が遅くなる。初期値は <code>1000</code>。</p>
+    </section>
+
+    <section>
+      <h2>Output Mapping</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>axis-mode</th>
+            <th>locked axis</th>
+            <th>output-axis</th>
+            <th>出力</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>x</code></td>
+            <td><code>AXIS_X</code></td>
+            <td><code>auto</code></td>
+            <td><code>hwheel</code></td>
+          </tr>
+          <tr>
+            <td><code>y</code></td>
+            <td><code>AXIS_Y</code></td>
+            <td><code>auto</code></td>
+            <td><code>wheel</code></td>
+          </tr>
+          <tr>
+            <td><code>snap</code></td>
+            <td><code>AXIS_X</code></td>
+            <td><code>auto</code></td>
+            <td><code>hwheel</code></td>
+          </tr>
+          <tr>
+            <td><code>snap</code></td>
+            <td><code>AXIS_Y</code></td>
+            <td><code>auto</code></td>
+            <td><code>wheel</code></td>
+          </tr>
+          <tr>
+            <td>任意</td>
+            <td>任意</td>
+            <td><code>wheel</code></td>
+            <td>常に <code>wheel</code></td>
+          </tr>
+          <tr>
+            <td>任意</td>
+            <td>任意</td>
+            <td><code>hwheel</code></td>
+            <td>常に <code>hwheel</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Example Config</h2>
+      <pre><code>/ {
+    scroll_dynamics: scroll_dynamics {
+        compatible = "zmk,input-processor-scroll-dynamics";
+        #input-processor-cells = &lt;0&gt;;
+
+        axis-mode = "snap";
+        output-axis = "auto";
+        invert-y;
+
+        input-scale = &lt;1000&gt;;
+        wheel-step = &lt;1000&gt;;
+
+        snap-ratio = &lt;1400&gt;;
+        snap-switch-ratio = &lt;1800&gt;;
+        snap-idle-ms = &lt;80&gt;;
+        minor-axis-scale = &lt;0&gt;;
+
+        min-factor = &lt;800&gt;;
+        max-factor = &lt;2400&gt;;
+        speed-threshold = &lt;900&gt;;
+        speed-max = &lt;4500&gt;;
+        acceleration-exponent = &lt;1&gt;;
+
+        inertia-start-speed = &lt;1300&gt;;
+        inertia-start-distance = &lt;8&gt;;
+        inertia-min-events = &lt;3&gt;;
+        inertia-decay = &lt;860&gt;;
+        inertia-stop-speed = &lt;80&gt;;
+        inertia-tick-ms = &lt;8&gt;;
+
+        reverse-cancel;
+        track-remainders;
+    };
+};</code></pre>
+
+      <h3>Input Listener Example</h3>
+      <pre><code>&amp;trackball_listener {
+    input-processors = &lt;&amp;scroll_dynamics&gt;;
+};</code></pre>
+    </section>
+
+    <section>
+      <h2>Vertical / Horizontal Layer Option</h2>
+      <p>snapモードだけでも動作するが、縦横を明示的なレイヤーに分けたい場合は2インスタンスにする。</p>
+      <pre><code>/ {
+    scroll_v: scroll_v {
+        compatible = "zmk,input-processor-scroll-dynamics";
+        #input-processor-cells = &lt;0&gt;;
+        axis-mode = "y";
+        output-axis = "wheel";
+        invert-y;
+        /* other parameters same as scroll_dynamics */
+    };
+
+    scroll_h: scroll_h {
+        compatible = "zmk,input-processor-scroll-dynamics";
+        #input-processor-cells = &lt;0&gt;;
+        axis-mode = "x";
+        output-axis = "hwheel";
+        /* other parameters same as scroll_dynamics */
+    };
+};</code></pre>
+    </section>
+
+    <section>
+      <h2>Implementation Files</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>drivers/input_processor/scroll_dynamics.c</code></td>
+            <td>processor本体、状態管理、axis snap、acceleration、inertia、quantization。</td>
+          </tr>
+          <tr>
+            <td><code>dts/bindings/input_processor/zmk,input-processor-scroll-dynamics.yaml</code></td>
+            <td>devicetree binding。</td>
+          </tr>
+          <tr>
+            <td><code>Kconfig</code></td>
+            <td><code>CONFIG_ZMK_INPUT_PROCESSOR_SCROLL_DYNAMICS</code> を追加。</td>
+          </tr>
+          <tr>
+            <td><code>CMakeLists.txt</code></td>
+            <td>有効時に <code>scroll_dynamics.c</code> をビルド対象へ追加。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Edge Cases</h2>
+      <ul>
+        <li><code>dt_ms == 0</code> の場合は <code>1</code> として扱う。</li>
+        <li>入力が <code>snap-idle-ms</code> を超えて止まったら gesture 状態をリセットする。</li>
+        <li>axis切り替え時は inertia と remainder の非対象軸をリセットする。</li>
+        <li>出力値が HID の許容範囲を超える場合は clamp する。</li>
+        <li><code>speed-max &lt;= speed-threshold</code> の設定は無効として build assert か初期化エラーにする。</li>
+        <li><code>wheel-step &lt;= 0</code> は無効。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Test Plan</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Test</th>
+            <th>Expected Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>小さい連続入力</td>
+            <td>remainder に蓄積され、閾値到達後に wheel が出る。入力は捨てられない。</td>
+          </tr>
+          <tr>
+            <td>高速入力</td>
+            <td><code>max-factor</code> 方向へ倍率が上がり、通常入力より大きい wheel が出る。</td>
+          </tr>
+          <tr>
+            <td>短い低速入力</td>
+            <td>inertia は発動しない。</td>
+          </tr>
+          <tr>
+            <td>高速flick</td>
+            <td>inertia tick が開始し、<code>inertia-decay</code> に従って自然に停止する。</td>
+          </tr>
+          <tr>
+            <td>逆方向入力</td>
+            <td>inertia が即時キャンセルされ、新しい方向の入力が優先される。</td>
+          </tr>
+          <tr>
+            <td>斜め入力</td>
+            <td>初回イベントで主軸が決まり、非主軸は <code>minor-axis-scale</code> に従って抑制される。</td>
+          </tr>
+          <tr>
+            <td>idle後の入力</td>
+            <td>前回のaxis lockに引きずられず、新しい主軸が即時に決まる。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Tuning Guide</h2>
+      <ol>
+        <li><code>wheel-step</code> と <code>input-scale</code> で基本のスクロール量を決める。</li>
+        <li><code>min-factor</code> を 700 - 1000 の範囲で調整し、小さい操作の精密さを決める。</li>
+        <li><code>max-factor</code> を 1800 - 3000 の範囲で調整し、大きい操作の伸びを決める。</li>
+        <li><code>speed-threshold</code> を上げると加速開始が遅くなり、下げると早くなる。</li>
+        <li><code>inertia-start-speed</code> と <code>inertia-start-distance</code> で、誤発動しない境界を決める。</li>
+        <li><code>inertia-decay</code> を 820 - 920 の範囲で調整し、流れ方を決める。</li>
+        <li><code>snap-ratio</code> を 1200 - 1600 の範囲で調整し、軸ロックの入り方を決める。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Build Milestones</h2>
+      <ol>
+        <li>binding / Kconfig / CMake を追加し、空processorがビルドできる状態にする。</li>
+        <li>axis-mode と wheel / hwheel 出力だけを実装する。</li>
+        <li>remainder quantizer を追加する。</li>
+        <li>zero-wait snap と hysteresis lock を追加する。</li>
+        <li>acceleration curve を追加する。</li>
+        <li>inertia timer と reverse cancel を追加する。</li>
+        <li>ログを一時的に入れて実機で tuning guide の順に詰める。</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Initial Values</h2>
+      <pre><code>scroll-dynamics {
+    compatible = "zmk,input-processor-scroll-dynamics";
+    #input-processor-cells = &lt;0&gt;;
+
+    axis-mode = "snap";
+    snap-ratio = &lt;1400&gt;;
+    snap-switch-ratio = &lt;1800&gt;;
+    snap-idle-ms = &lt;80&gt;;
+    minor-axis-scale = &lt;0&gt;;
+
+    min-factor = &lt;800&gt;;
+    max-factor = &lt;2400&gt;;
+    speed-threshold = &lt;900&gt;;
+    speed-max = &lt;4500&gt;;
+    acceleration-exponent = &lt;1&gt;;
+    track-remainders;
+
+    inertia-start-speed = &lt;1300&gt;;
+    inertia-start-distance = &lt;8&gt;;
+    inertia-min-events = &lt;3&gt;;
+    inertia-decay = &lt;860&gt;;
+    inertia-stop-speed = &lt;80&gt;;
+    inertia-tick-ms = &lt;8&gt;;
+    reverse-cancel;
+};</code></pre>
+      <p>最初に動かすパラメータは <code>input-scale</code>、<code>wheel-step</code>、<code>max-factor</code>、<code>inertia-decay</code> の4つに限定する。</p>
+    </section>
+
+    <section>
+      <h2>References</h2>
+      <ul>
+        <li><a href="https://zmk.dev/docs/keymaps/behaviors/mouse-emulation">ZMK mouse emulation / smooth scrolling</a></li>
+        <li><a href="https://github.com/kot149/zmk-scroll-snap">zmk-scroll-snap</a></li>
+        <li><a href="https://github.com/mjmjm0101/zmk-input-processor-scroll-inertia">zmk-input-processor-scroll-inertia</a></li>
+        <li><a href="https://github.com/oleksandrmaslov/zmk-pointing-acceleration">zmk-pointing-acceleration</a></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
