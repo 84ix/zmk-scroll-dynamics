@@ -48,6 +48,7 @@ struct scroll_dynamics_config {
     bool invert_y;
     int32_t input_scale;
     int32_t wheel_step;
+    int32_t output_divisor;
     int32_t min_factor;
     int32_t max_factor;
     int32_t speed_threshold;
@@ -74,6 +75,8 @@ struct scroll_dynamics_data {
     int64_t last_input_ms;
     int32_t remainder_x;
     int32_t remainder_y;
+    int32_t output_remainder_x;
+    int32_t output_remainder_y;
     int32_t pending_x;
     int32_t pending_y;
     int32_t inertia_velocity;
@@ -148,11 +151,13 @@ static enum locked_axis choose_axis(const struct scroll_dynamics_config *cfg,
                (int64_t)abs_y * 1000 > (int64_t)abs_x * cfg->snap_switch_ratio) {
         data->locked_axis = AXIS_Y;
         data->remainder_x = 0;
+        data->output_remainder_x = 0;
         cancel_inertia(data);
     } else if (data->locked_axis == AXIS_Y &&
                (int64_t)abs_x * 1000 > (int64_t)abs_y * cfg->snap_switch_ratio) {
         data->locked_axis = AXIS_X;
         data->remainder_y = 0;
+        data->output_remainder_y = 0;
         cancel_inertia(data);
     }
 
@@ -225,13 +230,38 @@ static void set_active_remainder(struct scroll_dynamics_data *data, enum locked_
     }
 }
 
+static int32_t active_output_remainder(struct scroll_dynamics_data *data, enum locked_axis axis) {
+    return axis == AXIS_X ? data->output_remainder_x : data->output_remainder_y;
+}
+
+static void set_active_output_remainder(struct scroll_dynamics_data *data, enum locked_axis axis,
+                                        int32_t value) {
+    if (axis == AXIS_X) {
+        data->output_remainder_x = value;
+    } else {
+        data->output_remainder_y = value;
+    }
+}
+
 static int16_t emit_units_for_axis(const struct scroll_dynamics_config *cfg,
                                    struct scroll_dynamics_data *data, enum locked_axis axis,
                                    int32_t delta) {
     int32_t remainder = active_remainder_delta(data, axis);
     int16_t units = quantize(cfg, delta, &remainder);
     set_active_remainder(data, axis, remainder);
-    return units;
+
+    int32_t divisor = safe_divisor(cfg->output_divisor, 1);
+    if (divisor <= 1 || units == 0) {
+        return units;
+    }
+
+    int32_t output_remainder = active_output_remainder(data, axis);
+    int32_t acc = output_remainder + units;
+    int16_t output_units = CLAMP(acc / divisor, INT16_MIN, INT16_MAX);
+    output_remainder = acc - output_units * divisor;
+    set_active_output_remainder(data, axis, output_remainder);
+
+    return output_units;
 }
 
 static void send_mouse_scroll(int16_t hwheel, int16_t wheel) {
@@ -389,6 +419,7 @@ static struct zmk_input_processor_driver_api scroll_dynamics_driver_api = {
 
 #define SCROLL_DYNAMICS_INST(n)                                                                   \
     BUILD_ASSERT(DT_INST_PROP(n, wheel_step) > 0, "wheel-step must be greater than 0");           \
+    BUILD_ASSERT(DT_INST_PROP(n, output_divisor) > 0, "output-divisor must be greater than 0");   \
     BUILD_ASSERT(DT_INST_PROP(n, speed_max) > DT_INST_PROP(n, speed_threshold),                   \
                  "speed-max must be greater than speed-threshold");                              \
     static const struct scroll_dynamics_config scroll_dynamics_config_##n = {                     \
@@ -398,6 +429,7 @@ static struct zmk_input_processor_driver_api scroll_dynamics_driver_api = {
         .invert_y = DT_INST_PROP(n, invert_y),                                                    \
         .input_scale = DT_INST_PROP(n, input_scale),                                              \
         .wheel_step = DT_INST_PROP(n, wheel_step),                                                \
+        .output_divisor = DT_INST_PROP(n, output_divisor),                                        \
         .min_factor = DT_INST_PROP(n, min_factor),                                                \
         .max_factor = DT_INST_PROP(n, max_factor),                                                \
         .speed_threshold = DT_INST_PROP(n, speed_threshold),                                      \
