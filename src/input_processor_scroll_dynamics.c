@@ -196,6 +196,12 @@ static int16_t quantize(const struct scroll_dynamics_config *cfg, int32_t delta,
     return CLAMP(units, INT16_MIN, INT16_MAX);
 }
 
+static void suppress_pointer_event(struct input_event *event) {
+    event->type = INPUT_EV_REL;
+    event->code = INPUT_REL_WHEEL;
+    event->value = 0;
+}
+
 static uint16_t output_code(const struct scroll_dynamics_config *cfg, enum locked_axis axis) {
     if (cfg->output_axis == OUTPUT_AXIS_WHEEL) {
         return INPUT_REL_WHEEL;
@@ -308,7 +314,8 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
     }
 
     if (!event->sync) {
-        return ZMK_INPUT_PROC_STOP;
+        suppress_pointer_event(event);
+        return ZMK_INPUT_PROC_CONTINUE;
     }
 
     int32_t dx = data->pending_x;
@@ -331,7 +338,8 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
     if (raw_delta == 0) {
         data->last_event_ms = now;
         data->last_input_ms = now;
-        return ZMK_INPUT_PROC_STOP;
+        suppress_pointer_event(event);
+        return ZMK_INPUT_PROC_CONTINUE;
     }
 
     int32_t scaled_delta = scale_delta(cfg, raw_delta, dt_ms);
@@ -365,7 +373,9 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
     data->last_input_ms = now;
 
     if (units == 0) {
-        return ZMK_INPUT_PROC_STOP;
+        event->code = output_code(cfg, axis);
+        event->value = 0;
+        return ZMK_INPUT_PROC_CONTINUE;
     }
 
     event->code = output_code(cfg, axis);
