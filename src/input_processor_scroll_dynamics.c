@@ -247,23 +247,20 @@ static void set_active_output_remainder(struct scroll_dynamics_data *data, enum 
 static int16_t emit_units_for_axis(const struct scroll_dynamics_config *cfg,
                                    struct scroll_dynamics_data *data, enum locked_axis axis,
                                    int32_t delta) {
+    int32_t multiplier = safe_divisor(cfg->output_multiplier, 1);
+    int32_t divisor = safe_divisor(cfg->output_divisor, 1);
+    if (multiplier != 1 || divisor != 1) {
+        int32_t output_remainder = active_output_remainder(data, axis);
+        int64_t acc = output_remainder + (int64_t)delta * multiplier;
+        delta = CLAMP(acc / divisor, INT32_MIN, INT32_MAX);
+        output_remainder = acc - (int64_t)delta * divisor;
+        set_active_output_remainder(data, axis, output_remainder);
+    }
+
     int32_t remainder = active_remainder_delta(data, axis);
     int16_t units = quantize(cfg, delta, &remainder);
     set_active_remainder(data, axis, remainder);
-
-    int32_t multiplier = safe_divisor(cfg->output_multiplier, 1);
-    int32_t divisor = safe_divisor(cfg->output_divisor, 1);
-    if ((multiplier == 1 && divisor == 1) || units == 0) {
-        return units;
-    }
-
-    int32_t output_remainder = active_output_remainder(data, axis);
-    int32_t acc = output_remainder + (int64_t)units * multiplier;
-    int16_t output_units = CLAMP(acc / divisor, INT16_MIN, INT16_MAX);
-    output_remainder = acc - output_units * divisor;
-    set_active_output_remainder(data, axis, output_remainder);
-
-    return output_units;
+    return units;
 }
 
 static void send_mouse_scroll(int16_t hwheel, int16_t wheel) {
