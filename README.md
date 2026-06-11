@@ -19,6 +19,7 @@ See `zmk-scroll-input-plan.html` for the design notes.
 
         input-scale = <1000>;
         wheel-step = <75>;
+        output-multiplier = <1>;
         output-divisor = <1>;
 
         snap-ratio = <1400>;

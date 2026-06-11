@@ -48,6 +48,7 @@ struct scroll_dynamics_config {
     bool invert_y;
     int32_t input_scale;
     int32_t wheel_step;
+    int32_t output_multiplier;
     int32_t output_divisor;
     int32_t min_factor;
     int32_t max_factor;
@@ -250,13 +251,14 @@ static int16_t emit_units_for_axis(const struct scroll_dynamics_config *cfg,
     int16_t units = quantize(cfg, delta, &remainder);
     set_active_remainder(data, axis, remainder);
 
+    int32_t multiplier = safe_divisor(cfg->output_multiplier, 1);
     int32_t divisor = safe_divisor(cfg->output_divisor, 1);
-    if (divisor <= 1 || units == 0) {
+    if ((multiplier == 1 && divisor == 1) || units == 0) {
         return units;
     }
 
     int32_t output_remainder = active_output_remainder(data, axis);
-    int32_t acc = output_remainder + units;
+    int32_t acc = output_remainder + (int64_t)units * multiplier;
     int16_t output_units = CLAMP(acc / divisor, INT16_MIN, INT16_MAX);
     output_remainder = acc - output_units * divisor;
     set_active_output_remainder(data, axis, output_remainder);
@@ -419,6 +421,8 @@ static struct zmk_input_processor_driver_api scroll_dynamics_driver_api = {
 
 #define SCROLL_DYNAMICS_INST(n)                                                                   \
     BUILD_ASSERT(DT_INST_PROP(n, wheel_step) > 0, "wheel-step must be greater than 0");           \
+    BUILD_ASSERT(DT_INST_PROP(n, output_multiplier) > 0,                                         \
+                 "output-multiplier must be greater than 0");                                    \
     BUILD_ASSERT(DT_INST_PROP(n, output_divisor) > 0, "output-divisor must be greater than 0");   \
     BUILD_ASSERT(DT_INST_PROP(n, speed_max) > DT_INST_PROP(n, speed_threshold),                   \
                  "speed-max must be greater than speed-threshold");                              \
@@ -429,6 +433,7 @@ static struct zmk_input_processor_driver_api scroll_dynamics_driver_api = {
         .invert_y = DT_INST_PROP(n, invert_y),                                                    \
         .input_scale = DT_INST_PROP(n, input_scale),                                              \
         .wheel_step = DT_INST_PROP(n, wheel_step),                                                \
+        .output_multiplier = DT_INST_PROP(n, output_multiplier),                                  \
         .output_divisor = DT_INST_PROP(n, output_divisor),                                        \
         .min_factor = DT_INST_PROP(n, min_factor),                                                \
         .max_factor = DT_INST_PROP(n, max_factor),                                                \

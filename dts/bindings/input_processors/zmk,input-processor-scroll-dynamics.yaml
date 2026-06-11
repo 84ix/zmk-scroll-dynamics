@@ -29,6 +29,9 @@ properties:
   wheel-step:
     type: int
     default: 1000
+  output-multiplier:
+    type: int
+    default: 1
   output-divisor:
     type: int
     default: 1
