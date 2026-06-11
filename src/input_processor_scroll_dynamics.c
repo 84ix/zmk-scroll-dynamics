@@ -146,7 +146,7 @@ static enum locked_axis choose_axis(const struct scroll_dynamics_config *cfg,
         } else if ((int64_t)abs_y * 1000 >= (int64_t)abs_x * cfg->snap_ratio) {
             data->locked_axis = AXIS_Y;
         } else {
-            data->locked_axis = abs_x >= abs_y ? AXIS_X : AXIS_Y;
+            data->locked_axis = AXIS_Y;
         }
     } else if (data->locked_axis == AXIS_X &&
                (int64_t)abs_y * 1000 > (int64_t)abs_x * cfg->snap_switch_ratio) {
