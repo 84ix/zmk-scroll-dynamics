@@ -80,5 +80,8 @@ properties:
   inertia-tick-ms:
     type: int
     default: 8
+  reverse-cancel-distance:
+    type: int
+    default: 0
   reverse-cancel:
     type: boolean

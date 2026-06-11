@@ -65,6 +65,7 @@ struct scroll_dynamics_config {
     int32_t inertia_decay;
     int32_t inertia_stop_speed;
     int32_t inertia_tick_ms;
+    int32_t reverse_cancel_distance;
     bool reverse_cancel;
     bool track_remainders;
 };
@@ -375,7 +376,8 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
     int8_t direction = sign32(scaled_delta);
 
     if (cfg->reverse_cancel && direction != 0 && data->last_direction != 0 &&
-        direction != data->last_direction) {
+        direction != data->last_direction &&
+        abs32(scaled_delta) >= cfg->reverse_cancel_distance) {
         cancel_inertia(data);
         data->gesture_distance = 0;
         data->gesture_events = 0;
@@ -447,6 +449,7 @@ static struct zmk_input_processor_driver_api scroll_dynamics_driver_api = {
         .inertia_decay = DT_INST_PROP(n, inertia_decay),                                          \
         .inertia_stop_speed = DT_INST_PROP(n, inertia_stop_speed),                                \
         .inertia_tick_ms = DT_INST_PROP(n, inertia_tick_ms),                                      \
+        .reverse_cancel_distance = DT_INST_PROP(n, reverse_cancel_distance),                      \
         .reverse_cancel = DT_INST_PROP(n, reverse_cancel),                                        \
         .track_remainders = DT_INST_PROP(n, track_remainders),                                    \
     };                                                                                            \

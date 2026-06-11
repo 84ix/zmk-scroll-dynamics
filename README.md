@@ -40,6 +40,7 @@ See `zmk-scroll-input-plan.html` for the design notes.
         inertia-decay = <860>;
         inertia-stop-speed = <80>;
         inertia-tick-ms = <8>;
+        reverse-cancel-distance = <0>;
         reverse-cancel;
     };
 };
