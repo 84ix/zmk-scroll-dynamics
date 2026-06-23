@@ -31,6 +31,8 @@ See `zmk-scroll-input-plan.html` for the design notes.
         max-factor = <2400>;
         speed-threshold = <900>;
         speed-max = <4500>;
+        high-speed-threshold = <0>;
+        high-speed-hold-ms = <0>;
         acceleration-exponent = <1>;
         track-remainders;
 

@@ -54,6 +54,8 @@ struct scroll_dynamics_config {
     int32_t max_factor;
     int32_t speed_threshold;
     int32_t speed_max;
+    int32_t high_speed_threshold;
+    int32_t high_speed_hold_ms;
     int32_t acceleration_exponent;
     int32_t snap_ratio;
     int32_t snap_switch_ratio;
@@ -75,6 +77,8 @@ struct scroll_dynamics_data {
     enum locked_axis locked_axis;
     int64_t last_event_ms;
     int64_t last_input_ms;
+    int64_t high_speed_hold_until_ms;
+    int32_t last_active_dt_ms;
     int32_t remainder_x;
     int32_t remainder_y;
     int32_t output_remainder_x;
@@ -112,6 +116,8 @@ static void reset_gesture(struct scroll_dynamics_data *data) {
     data->gesture_distance = 0;
     data->gesture_events = 0;
     data->last_direction = 0;
+    data->high_speed_hold_until_ms = 0;
+    data->last_active_dt_ms = 0;
 }
 
 static int32_t safe_divisor(int32_t value, int32_t fallback) {
@@ -182,6 +188,16 @@ static int32_t acceleration_factor(const struct scroll_dynamics_config *cfg, int
     }
 
     return cfg->min_factor + (int64_t)(cfg->max_factor - cfg->min_factor) * t / 1000;
+}
+
+static bool is_high_speed_hold_active(const struct scroll_dynamics_config *cfg,
+                                      struct scroll_dynamics_data *data, int64_t now) {
+    return cfg->high_speed_hold_ms > 0 && data->high_speed_hold_until_ms > 0 &&
+           now <= data->high_speed_hold_until_ms;
+}
+
+static int32_t high_speed_threshold(const struct scroll_dynamics_config *cfg) {
+    return cfg->high_speed_threshold > 0 ? cfg->high_speed_threshold : cfg->speed_threshold;
 }
 
 static int32_t scale_delta(const struct scroll_dynamics_config *cfg, int32_t delta, int32_t dt_ms) {
@@ -331,9 +347,11 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
     const struct scroll_dynamics_config *cfg = dev->config;
     struct scroll_dynamics_data *data = dev->data;
     int64_t now = k_uptime_get();
-    int32_t dt_ms = data->last_event_ms == 0 ? 1 : MAX(now - data->last_event_ms, 1);
+    int32_t actual_dt_ms = data->last_event_ms == 0 ? 1 : MAX(now - data->last_event_ms, 1);
+    bool high_speed_hold_active = is_high_speed_hold_active(cfg, data, now);
 
-    if (data->last_input_ms == 0 || now - data->last_input_ms > cfg->snap_idle_ms) {
+    if (!high_speed_hold_active &&
+        (data->last_input_ms == 0 || now - data->last_input_ms > cfg->snap_idle_ms)) {
         reset_gesture(data);
     }
 
@@ -360,6 +378,11 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
         dy = -dy;
     }
 
+    int32_t dt_ms = actual_dt_ms;
+    if (high_speed_hold_active && actual_dt_ms > cfg->snap_idle_ms && data->last_active_dt_ms > 0) {
+        dt_ms = data->last_active_dt_ms;
+    }
+
     enum locked_axis axis = choose_axis(cfg, data, dx, dy);
     int32_t raw_delta = axis == AXIS_X ? dx : dy;
     int32_t minor_delta = axis == AXIS_X ? dy : dx;
@@ -374,6 +397,12 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
 
     int32_t scaled_delta = scale_delta(cfg, raw_delta, dt_ms);
     int8_t direction = sign32(scaled_delta);
+    int32_t speed = (int64_t)abs32(raw_delta) * 1000 / MAX(dt_ms, 1);
+
+    if (speed >= high_speed_threshold(cfg) && cfg->high_speed_hold_ms > 0) {
+        data->high_speed_hold_until_ms = now + cfg->high_speed_hold_ms;
+    }
+    data->last_active_dt_ms = dt_ms;
 
     if (cfg->reverse_cancel && direction != 0 && data->last_direction != 0 &&
         direction != data->last_direction &&
@@ -389,7 +418,6 @@ static int scroll_dynamics_handle_event(const struct device *dev, struct input_e
     }
     data->last_direction = direction;
 
-    int32_t speed = (int64_t)abs32(raw_delta) * 1000 / MAX(dt_ms, 1);
     if (speed >= cfg->inertia_start_speed &&
         data->gesture_distance >= cfg->inertia_start_distance &&
         data->gesture_events >= cfg->inertia_min_events) {
@@ -438,6 +466,8 @@ static struct zmk_input_processor_driver_api scroll_dynamics_driver_api = {
         .max_factor = DT_INST_PROP(n, max_factor),                                                \
         .speed_threshold = DT_INST_PROP(n, speed_threshold),                                      \
         .speed_max = DT_INST_PROP(n, speed_max),                                                  \
+        .high_speed_threshold = DT_INST_PROP(n, high_speed_threshold),                            \
+        .high_speed_hold_ms = DT_INST_PROP(n, high_speed_hold_ms),                                \
         .acceleration_exponent = DT_INST_PROP(n, acceleration_exponent),                          \
         .snap_ratio = DT_INST_PROP(n, snap_ratio),                                                \
         .snap_switch_ratio = DT_INST_PROP(n, snap_switch_ratio),                                  \

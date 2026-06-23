@@ -47,6 +47,12 @@ properties:
   speed-max:
     type: int
     default: 4500
+  high-speed-threshold:
+    type: int
+    default: 0
+  high-speed-hold-ms:
+    type: int
+    default: 0
   acceleration-exponent:
     type: int
     default: 1
